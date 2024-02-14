@@ -46,6 +46,7 @@ void FRenderPrimitive::init(HwRenderPrimitiveFactory& factory, backend::DriverAp
         auto const& ibh = indexBuffer->getHwHandle();
 
         mHandle = factory.create(driver, ebh, ibh, entry.type);
+        mVertexBufferInfoHandle = vertexBuffer->getVertexBufferInfoHandle();
 
         mPrimitiveType = entry.type;
         mIndexOffset = entry.offset;

@@ -38,8 +38,8 @@
 #include <stdint.h>
 
 #define HandleAllocatorGL  HandleAllocator<24,  64, 136>    // ~3640 / pool / MiB
-#define HandleAllocatorVK  HandleAllocator<80, 176, 320>    // ~1820 / pool / MiB
-#define HandleAllocatorMTL HandleAllocator<48, 160, 592>    // ~1310 / pool / MiB
+#define HandleAllocatorVK  HandleAllocator<64, 160, 312>    // ~1820 / pool / MiB
+#define HandleAllocatorMTL HandleAllocator<32,  48, 552>    // ~1310 / pool / MiB
 
 namespace filament::backend {
 

@@ -522,10 +522,12 @@ void OpenGLDriver::createRenderPrimitiveR(Handle<HwRenderPrimitive> rph,
     GLIndexBuffer const* const ib = handle_cast<const GLIndexBuffer*>(ibh);
     assert_invariant(ib->elementSize == 2 || ib->elementSize == 4);
 
-    GLRenderPrimitive* rp = handle_cast<GLRenderPrimitive*>(rph);
+    GLVertexBuffer* const vb = handle_cast<GLVertexBuffer*>(vbh);
+    GLRenderPrimitive* const rp = handle_cast<GLRenderPrimitive*>(rph);
     rp->gl.indicesSize = (ib->elementSize == 4u) ? 4u : 2u;
     rp->gl.vertexBufferWithObjects = vbh;
     rp->type = pt;
+    rp->vbih = vb->vbih;
 
     gl.procs.genVertexArrays(1, &rp->gl.vao);
 
@@ -3728,41 +3730,44 @@ void OpenGLDriver::updateTextureLodRange(GLTexture* texture, int8_t targetLevel)
 #endif
 }
 
-void OpenGLDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
-        uint32_t const indexOffset, uint32_t const indexCount, uint32_t const instanceCount) {
+void OpenGLDriver::bindPipeline(PipelineState state) {
     DEBUG_MARKER()
     auto& gl = mContext;
-
+    setRasterState(state.rasterState);
+    setStencilState(state.stencilState);
+    gl.polygonOffset(state.polygonOffset.slope, state.polygonOffset.constant);
     OpenGLProgram* const p = handle_cast<OpenGLProgram*>(state.program);
+    mValidProgram = useProgram(p);
+}
 
-    bool const success = useProgram(p);
-    if (UTILS_UNLIKELY(!success)) {
-        // Avoid fatal (or cascading) errors that can occur during the draw call when the program
-        // is invalid. The shader compile error has already been dumped to the console at this
-        // point, so it's fine to simply return early.
-        return;
-    }
+void OpenGLDriver::bindRenderPrimitive(Handle<HwRenderPrimitive> rph) {
+    DEBUG_MARKER()
+    auto& gl = mContext;
 
     GLRenderPrimitive* const rp = handle_cast<GLRenderPrimitive*>(rph);
 
     // Gracefully do nothing if the render primitive has not been set up.
     VertexBufferHandle vb = rp->gl.vertexBufferWithObjects;
     if (UTILS_UNLIKELY(!vb)) {
+        mBoundRenderPrimitive = nullptr;
         return;
     }
 
-    gl.bindVertexArray(&rp->gl);
-
     // If necessary, mutate the bindings in the VAO.
+    gl.bindVertexArray(&rp->gl);
     GLVertexBuffer const* const glvb = handle_cast<GLVertexBuffer*>(vb);
     if (UTILS_UNLIKELY(rp->gl.vertexBufferVersion != glvb->bufferObjectsVersion)) {
         updateVertexArrayObject(rp, glvb);
     }
 
-    setRasterState(state.rasterState);
-    setStencilState(state.stencilState);
+    mBoundRenderPrimitive = rp;
+}
 
-    gl.polygonOffset(state.polygonOffset.slope, state.polygonOffset.constant);
+void OpenGLDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t instanceCount) {
+    GLRenderPrimitive const* const rp = mBoundRenderPrimitive;
+    if (UTILS_UNLIKELY(!rp || !mValidProgram)) {
+        return;
+    }
 
     if (UTILS_LIKELY(instanceCount <= 1)) {
         glDrawElements(GLenum(rp->type), (GLsizei)indexCount, rp->gl.getIndicesType(),
@@ -3786,6 +3791,17 @@ void OpenGLDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
 
 void OpenGLDriver::scissor(Viewport scissor) {
     setScissor(scissor);
+}
+
+void OpenGLDriver::draw(PipelineState state, Handle<HwRenderPrimitive> rph,
+        uint32_t const indexOffset, uint32_t const indexCount, uint32_t const instanceCount) {
+    DEBUG_MARKER()
+    GLRenderPrimitive* const rp = handle_cast<GLRenderPrimitive*>(rph);
+    state.primitiveType = rp->type;
+    state.vertexBufferInfo = rp->vbih;
+    bindPipeline(state);
+    bindRenderPrimitive(rph);
+    draw2(indexOffset, indexCount, instanceCount);
 }
 
 void OpenGLDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGroupCount) {

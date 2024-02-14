@@ -866,6 +866,13 @@ void RenderPass::Executor::execute(FEngine& engine,
                 .polygonOffset = mPolygonOffset,
         };
 
+        PipelineState mCurrentPipeline{};
+        Handle<HwRenderPrimitive> mCurrentPrimitiveHandle{};
+        UTILS_UNUSED bool mRebindPipeline = true;
+        UTILS_UNUSED int mPipelineBind = 0;
+        UTILS_UNUSED int mRenderPrimitiveBind = 0;
+        UTILS_UNUSED int mTotalDrawCalls = 0;
+
         FMaterialInstance const* UTILS_RESTRICT mi = nullptr;
         FMaterial const* UTILS_RESTRICT ma = nullptr;
         auto const* UTILS_RESTRICT pCustomCommands = mCustomCommands.data();
@@ -918,7 +925,9 @@ void RenderPass::Executor::execute(FEngine& engine,
                 // per-renderable uniform
                 PrimitiveInfo const info = first->primitive;
                 pipeline.rasterState = info.rasterState;
-                //pipeline.vertexBufferInfo = info.vertexBufferInfo;
+                pipeline.vertexBufferInfo = info.primitive->getVertexBufferInfoHandle();
+                pipeline.primitiveType = info.primitive->getPrimitiveType();
+                assert_invariant(pipeline.vertexBufferInfo);
 
                 if (UTILS_UNLIKELY(mi != info.primitive->getMaterialInstance())) {
                     // this is always taken the first time
@@ -940,6 +949,7 @@ void RenderPass::Executor::execute(FEngine& engine,
                    }
                     pipeline.stencilState = mi->getStencilState();
                     mi->use(driver);
+                    mRebindPipeline = true;
                 }
 
                 assert_invariant(ma);
@@ -989,6 +999,7 @@ void RenderPass::Executor::execute(FEngine& engine,
                     // note: even if only skinning is enabled, binding morphTargetBuffer is needed.
                     driver.bindSamplers(+SamplerBindingPoints::PER_RENDERABLE_MORPHING,
                             info.morphTargetBuffer);
+                    mRebindPipeline = true;
                 }
 
                 if (UTILS_UNLIKELY(info.morphWeightBuffer)) {
@@ -1001,13 +1012,34 @@ void RenderPass::Executor::execute(FEngine& engine,
                     // note: even if only morphing is enabled, binding skinningTexture is needed.
                     driver.bindSamplers(+SamplerBindingPoints::PER_RENDERABLE_SKINNING,
                             info.skinningTexture);
+                    mRebindPipeline = true;
                 }
 
-                driver.draw(pipeline, info.primitive->getHwHandle(),
-                        info.primitive->getIndexOffset(), info.primitive->getIndexCount(),
+                mTotalDrawCalls++;
+
+                if (mRebindPipeline || memcmp(&pipeline,  &mCurrentPipeline, sizeof(PipelineState))) {
+                    mRebindPipeline = false;
+                    mCurrentPipeline = pipeline;
+                    driver.bindPipeline(pipeline);
+                    mPipelineBind++;
+                }
+
+                if (info.primitive->getHwHandle() != mCurrentPrimitiveHandle) {
+                    mCurrentPrimitiveHandle = info.primitive->getHwHandle();
+                    driver.bindRenderPrimitive(info.primitive->getHwHandle());
+                    mRenderPrimitiveBind++;
+                }
+
+                driver.draw2(
+                        info.primitive->getIndexOffset(),
+                        info.primitive->getIndexCount(),
                         instanceCount);
             }
         }
+
+        slog.d << "pipeline: " << mTotalDrawCalls - mPipelineBind << "/" << mPipelineBind <<
+               ", rp: " << mTotalDrawCalls - mRenderPrimitiveBind << "/" << mRenderPrimitiveBind
+               << io::endl;
 
         // If the remaining space is less than half the capacity, we flush right away to
         // allow some headroom for commands that might come later.
